@@ -1,4 +1,4 @@
 Flask
-thaibulksms-api
 line-bot-sdk
 gunicorn
+requests
