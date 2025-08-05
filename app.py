@@ -1,4 +1,6 @@
-# ... (โค้ดส่วน Imports, Configuration, Helper Functions เหมือนเดิมทั้งหมด) ...
+# ==============================================================================
+# Imports - ส่วนนำเข้า Library ที่จำเป็น
+# ==============================================================================
 from flask import Flask, request, jsonify, abort
 import threading
 import time
@@ -12,7 +14,6 @@ try:
     THB_SDK_AVAILABLE = True
 except ImportError:
     THB_SDK_AVAILABLE = False
-
 try:
     from linebot.v3 import WebhookHandler
     from linebot.v3.exceptions import InvalidSignatureError
@@ -22,18 +23,29 @@ try:
 except ImportError:
     LINE_SDK_AVAILABLE = False
 
+# ==============================================================================
+# Flask App & Global Variables
+# ==============================================================================
 app = Flask(__name__)
 start_time = datetime.now()
 
+# ==============================================================================
+# Configuration - ส่วนตั้งค่าต่างๆ
+# ==============================================================================
+# -- ThaiBulkSMS Configuration --
 THB_API_KEY = os.environ.get("THB_API_KEY", "YOUR_THB_API_KEY")
 THB_API_SECRET = os.environ.get("THB_API_SECRET", "YOUR_THB_API_SECRET")
-THB_SENDER_NAME = os.environ.get("THB_SENDER_NAME", "YOUR_APPROVED_SENDER_NAME")
+# THB_SENDER_NAME ถูกเอาออกไปแล้ว
+
+# -- LINE OA Configuration --
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "YOUR_LINE_CHANNEL_SECRET")
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "YOUR_LINE_CHANNEL_ACCESS_TOKEN")
-DEFAULT_AUTO_RUN_MESSAGE = "นี่คือข้อความที่ถูกกำหนดไว้ในระบบ"
+
+# -- App Configuration --
 DEFAULT_COUNTRY_CODE = "+66"
 LOG_FILE = "sent_log.json"
 
+# -- Clients Initialization --
 if THB_SDK_AVAILABLE:
     thaibulksms_client = ThaiBulkSMS(api_key=THB_API_KEY, api_secret=THB_API_SECRET)
 else:
@@ -45,6 +57,7 @@ else:
     handler = None
     line_configuration = None
 
+# ... (Helper Functions: format_phone_number, load_sent_log, save_sent_log เหมือนเดิม) ...
 def format_phone_number(number_str):
     number_str = number_str.strip()
     if number_str.startswith('0') and len(number_str) == 10:
@@ -56,8 +69,7 @@ def format_phone_number(number_str):
 def load_sent_log():
     try:
         with open(LOG_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return set(data)
+            return set(json.load(f))
     except Exception:
         return set()
 def save_sent_log(sent_set):
@@ -65,10 +77,8 @@ def save_sent_log(sent_set):
         json.dump(list(sent_set), f, ensure_ascii=False, indent=2)
 
 # ==============================================================================
-# Webhooks (จุดรับข้อมูลจากภายนอก)
+# LINE OA Webhook - จุดรับคำสั่งจาก LINE (อัปเดตล่าสุด)
 # ==============================================================================
-
-# 1. Webhook สำหรับรับ "คำสั่ง" จาก LINE OA (ใช้ POST)
 @app.route("/webhook", methods=['POST'])
 def webhook():
     if not LINE_SDK_AVAILABLE: abort(500)
@@ -80,39 +90,32 @@ def webhook():
         abort(400)
     return 'OK'
 
-# 2. Webhook สำหรับรับ "สถานะ" จาก ThaiBulkSMS (ใช้ GET) <<<<<<<<<<< เพิ่มใหม่
-@app.route("/thaibulksms-webhook", methods=['GET'])
-def thaibulksms_webhook():
-    print("--- ได้รับ Webhook จาก ThaiBulkSMS ---")
-    # ThaiBulkSMS จะส่งข้อมูลกลับมาเป็น Query Parameter ใน URL
-    params = request.args
-    print(f"ข้อมูลที่ได้รับ: {params.to_dict()}")
-    # คุณสามารถนำข้อมูลนี้ไปอัปเดตสถานะในฐานข้อมูลหรือไฟล์ Log ต่อได้
-    # เช่น params.get('credit_remain'), params.get('update_time')
-    return "OK", 200 # ตอบกลับสถานะ 200 OK ให้ ThaiBulkSMS ทราบ
-
-
-# ==============================================================================
-# LINE OA Logic - ตรรกะการทำงานของ LINE
-# ==============================================================================
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
-    # ... (โค้ดส่วนนี้เหมือนเดิมทุกประการ) ...
+    """
+    จัดการข้อความที่ได้รับจาก LINE
+    """
     text_input = event.message.text.strip()
-    command_parts = text_input.split(maxsplit=2)
+    # แยกคำสั่งเป็น 4 ส่วน: run, target, sender_name, message
+    command_parts = text_input.split(maxsplit=3)
     reply_token = event.reply_token
-    if len(command_parts) >= 2 and command_parts[0].lower() == "run":
+    
+    # ตรวจสอบรูปแบบคำสั่งพื้นฐาน
+    if len(command_parts) == 4 and command_parts[0].lower() == "run":
         target = command_parts[1]
-        custom_message = command_parts[2] if len(command_parts) == 3 else DEFAULT_AUTO_RUN_MESSAGE
+        sender_name = command_parts[2]
+        custom_message = command_parts[3]
+
         def on_complete_callback(s, f, e=None):
-            summary_message = f"เกิดข้อผิดพลาด: {e}" if e else f"สรุปผลการส่งสำหรับ '{target}':\n✅ สำเร็จ: {s} รายการ\n❌ ล้มเหลว: {f} รายการ"
+            summary_message = f"เกิดข้อผิดพลาด: {e}" if e else f"สรุปผลการส่งสำหรับ '{target}'\n(Sender: {sender_name}):\n✅ สำเร็จ: {s}\n❌ ล้มเหลว: {f}"
             with ApiClient(line_configuration) as api_client:
                 line_bot_api = MessagingApi(api_client)
                 line_bot_api.reply_message(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=summary_message)]))
+
         if target.lower().endswith(".txt"):
-            threading.Thread(target=run_sms_job_from_line, args=(target, custom_message, on_complete_callback)).start()
+            threading.Thread(target=run_sms_job_from_line, args=(target, sender_name, custom_message, on_complete_callback)).start()
         elif target.startswith("0") and len(target) == 10 and target.isdigit():
-            threading.Thread(target=process_bulk_sms, args=([target], custom_message, on_complete_callback)).start()
+            threading.Thread(target=process_bulk_sms, args=([target], sender_name, custom_message, on_complete_callback)).start()
         else:
             reply_command_error(reply_token)
     else:
@@ -121,37 +124,44 @@ def handle_message(event):
 def reply_command_error(reply_token):
     with ApiClient(line_configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
-        reply_text = "คำสั่งไม่ถูกต้อง รูปแบบคือ:\n- run <เป้าหมาย> [ข้อความ]"
+        reply_text = "คำสั่งไม่ถูกต้อง รูปแบบคือ:\nrun <เป้าหมาย> <SenderName> <ข้อความ>"
         line_bot_api.reply_message(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=reply_text)]))
-        
-def run_sms_job_from_line(filename, message, callback):
-    # ... (โค้ดส่วนนี้เหมือนเดิมทุกประการ) ...
+
+def run_sms_job_from_line(filename, sender_name, message, callback):
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             phone_numbers = f.read().strip().splitlines()
-        process_bulk_sms(phone_numbers, message, callback)
+        process_bulk_sms(phone_numbers, sender_name, message, callback)
     except FileNotFoundError:
-        callback(0, 0, error_message=f"ไม่พบไฟล์ '{filename}' บนเซิร์ฟเวอร์")
+        callback(0, 0, error_message=f"ไม่พบไฟล์ '{filename}'")
     except Exception as e:
-        callback(0, 0, error_message=f"เกิดข้อผิดพลาดในการอ่านไฟล์: {e}")
+        callback(0, 0, error_message=f"เกิดข้อผิดพลาด: {e}")
 
 # ==============================================================================
-# Core SMS Processing - ตรรกะการส่ง SMS หลัก
+# Core SMS Processing (ส่วนที่แก้ไขหลัก)
 # ==============================================================================
-def process_bulk_sms(phone_numbers, message, callback=None):
-    # ... (โค้ดส่วนนี้เหมือนเดิมทุกประการ) ...
-    print("--- เริ่มงานส่ง SMS (ผ่าน ThaiBulkSMS) ---")
+def process_bulk_sms(phone_numbers, sender_name, message, callback=None):
+    """
+    ฟังก์ชันส่ง SMS ที่เปลี่ยนไปใช้ ThaiBulkSMS และรับ sender_name แบบไดนามิก
+    """
+    print(f"--- เริ่มงานส่ง SMS (Sender: {sender_name}) ---")
     successful_sends = 0; failed_sends = 0
     sent_log = load_sent_log(); sent_this_run = set()
+
     for number in phone_numbers:
         formatted_number_plus = format_phone_number(number)
         number_for_thb = formatted_number_plus.replace("+66", "0")
-        dedup_key = f"{formatted_number_plus}|{message}"
+        dedup_key = f"{formatted_number_plus}|{sender_name}|{message}"
+        
         if dedup_key in sent_log or dedup_key in sent_this_run:
             print(f"⚠️ ข้ามการส่งซ้ำไปยัง: {number_for_thb}")
             continue
         try:
-            response = thaibulksms_client.sms(msisdn=number_for_thb, message=message, sender_name=THB_SENDER_NAME)
+            response = thaibulksms_client.sms(
+                msisdn=number_for_thb,
+                message=message,
+                sender_name=sender_name  # << ใช้ Sender Name ที่ได้รับมา
+            )
             if response.get('status') == 'success':
                 print(f"✅ ส่งข้อความเข้าคิวสำเร็จ: {number_for_thb}")
                 sent_log.add(dedup_key); sent_this_run.add(dedup_key)
@@ -164,34 +174,31 @@ def process_bulk_sms(phone_numbers, message, callback=None):
             print(f"❌ เกิดข้อผิดพลาดร้ายแรงในการส่ง: {number_for_thb}, เหตุผล: {str(e)}")
             failed_sends += 1
         time.sleep(0.5)
+    
     save_sent_log(sent_log)
     print("--- งานส่ง SMS เสร็จสิ้น ---")
-    if callback: callback(successful_sends, failed_sends)
+    if callback:
+        callback(successful_sends, failed_sends)
     
-# ... (โค้ดส่วนที่เหลือ /api/status, /, และ if __name__ == '__main__' เหมือนเดิมทุกประการ) ...
+# ... (ส่วนที่เหลือ /webhook GET, /api/status, /, if __name__ == '__main__' เหมือนเดิม) ...
+@app.route("/thaibulksms-webhook", methods=['GET'])
+def thaibulksms_webhook():
+    print(f"ได้รับ Webhook จาก ThaiBulkSMS: {request.args.to_dict()}")
+    return "OK", 200
 @app.route('/api/status', methods=['GET'])
 def status():
     uptime = datetime.now() - start_time
-    uptime_str = str(timedelta(seconds=int(uptime.total_seconds())))
-    return jsonify({"สถานะ uptime": uptime_str})
-
+    return jsonify({"สถานะ uptime": str(timedelta(seconds=int(uptime.total_seconds())))})
 @app.route('/', methods=['GET'])
 def main():
     return jsonify({"สถานะบริการ": "ออนไลน์", "ประเภทบริการ": "เกตเวย์สำหรับส่ง SMS (ThaiBulkSMS)"})
-
 if __name__ == '__main__':
     if not THB_SDK_AVAILABLE or not LINE_SDK_AVAILABLE:
         print("!!! ข้อผิดพลาดร้ายแรง: ยังไม่ได้ติดตั้งไลบรารีที่จำเป็น !!!")
         if not THB_SDK_AVAILABLE: print("กรุณารันคำสั่ง: pip install thaibulksms-api")
         if not LINE_SDK_AVAILABLE: print("กรุณารันคำสั่ง: pip install line-bot-sdk")
         sys.exit(1)
-    if len(sys.argv) == 2:
-        file_path = sys.argv[1]
-        def cli_callback(s, f, e=None):
-            if e: print(f"สรุปผล -> เกิดข้อผิดพลาด: {e}")
-            else: print(f"สรุปผล -> สำเร็จ: {s}, ล้มเหลว: {f}")
-        run_sms_job_from_line(file_path, DEFAULT_AUTO_RUN_MESSAGE, callback=cli_callback)
-    else:
-        print("--- เริ่มต้นการทำงานในโหมดเซิร์ฟเวอร์ ---")
-        print("รอรับคำขอ API และคำสั่งจาก LINE... กด CTRL+C เพื่อหยุดการทำงาน")
+    # ลบโหมด Auto-run ออกเพื่อให้เน้นการสั่งงานผ่าน LINE OA
+    print("--- เริ่มต้นการทำงานในโหมดเซิร์ฟเวอร์ ---")
+    print("รอรับคำสั่งจาก LINE... กด CTRL+C เพื่อหยุดการทำงาน")
     app.run(debug=True, host='0.0.0.0', port=5000)
