@@ -1,5 +1,5 @@
 # ==============================================================================
-# Imports - ส่วนนำเข้า Library ที่จำเป็น
+# Imports
 # ==============================================================================
 from flask import Flask, request, jsonify, abort
 import threading
@@ -8,11 +8,8 @@ from datetime import datetime, timedelta
 import os 
 import sys 
 import json
-import requests # <<<<<<< เพิ่ม Library นี้
+import requests
 
-# เราไม่ต้องการ thaibulksms-api อีกต่อไป
-
-# Import สำหรับ LINE
 try:
     from linebot.v3 import WebhookHandler
     from linebot.v3.exceptions import InvalidSignatureError
@@ -23,18 +20,14 @@ except ImportError:
     LINE_SDK_AVAILABLE = False
 
 # ==============================================================================
-# Flask App & Global Variables
+# App & Config
 # ==============================================================================
 app = Flask(__name__)
 start_time = datetime.now()
 
-# ==============================================================================
-# Configuration - ส่วนตั้งค่าต่างๆ
-# ==============================================================================
 # -- ThaiBulkSMS Configuration --
 THB_API_KEY = os.environ.get("THB_API_KEY", "YOUR_THB_API_KEY")
 THB_API_SECRET = os.environ.get("THB_API_SECRET", "YOUR_THB_API_SECRET")
-# ไม่ต้องมี THB_SENDER_NAME ใน Config แล้ว เพราะจะส่งไปพร้อมกับคำสั่ง
 
 # -- LINE OA Configuration --
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "YOUR_LINE_CHANNEL_SECRET")
@@ -52,7 +45,9 @@ else:
     handler = None
     line_configuration = None
 
-# ... (Helper Functions: format_phone_number, load_sent_log, save_sent_log เหมือนเดิม) ...
+# ==============================================================================
+# Helper Functions
+# ==============================================================================
 def format_phone_number(number_str):
     number_str = number_str.strip()
     if number_str.startswith('0') and len(number_str) == 10:
@@ -69,11 +64,10 @@ def save_sent_log(sent_set):
     with open(LOG_FILE, 'w', encoding='utf-8') as f: json.dump(list(sent_set), f, ensure_ascii=False, indent=2)
 
 # ==============================================================================
-# LINE OA Webhook - จุดรับคำสั่งจาก LINE
+# LINE OA Webhook
 # ==============================================================================
 @app.route("/webhook", methods=['POST'])
 def webhook():
-    # ... (โค้ดส่วนนี้เหมือนเดิมทุกประการ) ...
     if not LINE_SDK_AVAILABLE: abort(500)
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
@@ -85,7 +79,6 @@ def webhook():
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
-    # ... (โค้ดส่วนนี้เหมือนเดิมทุกประการ) ...
     text_input = event.message.text.strip()
     command_parts = text_input.split(maxsplit=3)
     reply_token = event.reply_token
@@ -108,14 +101,12 @@ def handle_message(event):
         reply_command_error(reply_token)
 
 def reply_command_error(reply_token):
-    # ... (โค้ดส่วนนี้เหมือนเดิมทุกประการ) ...
     with ApiClient(line_configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         reply_text = "คำสั่งไม่ถูกต้อง รูปแบบคือ:\nrun <เป้าหมาย> <SenderName> <ข้อความ>"
         line_bot_api.reply_message(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=reply_text)]))
 
 def run_sms_job_from_line(filename, sender_name, message, callback):
-    # ... (โค้ดส่วนนี้เหมือนเดิมทุกประการ) ...
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             phone_numbers = f.read().strip().splitlines()
@@ -130,13 +121,11 @@ def run_sms_job_from_line(filename, sender_name, message, callback):
 # ==============================================================================
 def process_bulk_sms(phone_numbers, sender_name, message, callback=None):
     """
-    ฟังก์ชันส่ง SMS ที่เปลี่ยนไปยิง API v2 โดยตรง
+    ฟังก์ชันส่ง SMS ที่ยิง API v2 โดยตรงตามเอกสารล่าสุด
     """
     print(f"--- เริ่มงานส่ง SMS (Sender: {sender_name}) ---")
     
-    # URL ของ API ตามเอกสาร
     url = "https://api-v2.thaibulksms.com/sms"
-    
     headers = {
         'Content-Type': 'application/json',
         'api_key': THB_API_KEY,
@@ -148,25 +137,24 @@ def process_bulk_sms(phone_numbers, sender_name, message, callback=None):
 
     for number in phone_numbers:
         formatted_number_plus = format_phone_number(number)
-        number_for_thb = formatted_number_plus.replace("+", "") # API v2 ต้องการเบอร์แบบไม่มี +
+        number_for_thb = formatted_number_plus.replace("+", "")
         dedup_key = f"{formatted_number_plus}|{sender_name}|{message}"
         
         if dedup_key in sent_log or dedup_key in sent_this_run:
             print(f"⚠️ ข้ามการส่งซ้ำไปยัง: {number_for_thb}")
             continue
         try:
-            # สร้าง Body ของ Request ตามเอกสาร
+            # === ส่วนที่แก้ไข Parameter ให้ตรงตามเอกสาร ===
             payload = {
                 "msisdn": number_for_thb,
                 "message": message,
-                "sender": sender_name
+                "sender": sender_name  # <<<<<<<<<<< แก้จาก sender_name เป็น sender
             }
             
-            # ส่ง Request
             response = requests.post(url, headers=headers, json=payload)
             response_data = response.json()
 
-            if response.status_code == 201: # 201 Created คือสำเร็จตามเอกสาร
+            if response.status_code == 201:
                 print(f"✅ ส่งข้อความเข้าคิวสำเร็จ: {number_for_thb}")
                 sent_log.add(dedup_key); sent_this_run.add(dedup_key)
                 successful_sends += 1
@@ -184,7 +172,9 @@ def process_bulk_sms(phone_numbers, sender_name, message, callback=None):
     if callback:
         callback(successful_sends, failed_sends)
 
-# ... (ส่วนที่เหลือ /webhook GET, /api/status, /, if __name__ == '__main__' เหมือนเดิม) ...
+# ==============================================================================
+# Other Endpoints & Main Execution
+# ==============================================================================
 @app.route("/thaibulksms-webhook", methods=['GET'])
 def thaibulksms_webhook():
     print(f"ได้รับ Webhook จาก ThaiBulkSMS: {request.args.to_dict()}")
@@ -197,9 +187,9 @@ def status():
 def main():
     return jsonify({"สถานะบริการ": "ออนไลน์", "ประเภทบริการ": "เกตเวย์สำหรับส่ง SMS (ThaiBulkSMS v2)"})
 if __name__ == '__main__':
-    if not LINE_SDK_AVAILABLE: # ไม่ต้องเช็ค THB_SDK_AVAILABLE แล้ว
+    if not LINE_SDK_AVAILABLE:
         print("!!! ข้อผิดพลาดร้ายแรง: ยังไม่ได้ติดตั้งไลบรารีที่จำเป็น !!!")
-        print("กรุณารันคำสั่ง: pip install line-bot-sdk")
+        print("กรุณารันคำสั่ง: pip install line-bot-sdk requests Flask gunicorn")
         sys.exit(1)
         
     print("--- เริ่มต้นการทำงานในโหมดเซิร์ฟเวอร์ ---")
