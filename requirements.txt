@@ -1,4 +1,3 @@
-Flask
-line-bot-sdk
+flask
+reportlab
 gunicorn
-requests
