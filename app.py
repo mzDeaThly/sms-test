@@ -1,197 +1,75 @@
-# ==============================================================================
-# Imports
-# ==============================================================================
-from flask import Flask, request, jsonify, abort
-import threading
-import time
-from datetime import datetime, timedelta
-import os 
-import sys 
-import json
-import requests
+from flask import Flask, render_template, request, send_file
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from io import BytesIO
+import datetime
 
-try:
-    from linebot.v3 import WebhookHandler
-    from linebot.v3.exceptions import InvalidSignatureError
-    from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
-    from linebot.v3.webhooks import MessageEvent, TextMessageContent
-    LINE_SDK_AVAILABLE = True
-except ImportError:
-    LINE_SDK_AVAILABLE = False
-
-# ==============================================================================
-# App & Config
-# ==============================================================================
 app = Flask(__name__)
-start_time = datetime.now()
 
-# -- ThaiBulkSMS Configuration --
-THB_API_KEY = os.environ.get("THB_API_KEY", "YOUR_THB_API_KEY")
-THB_API_SECRET = os.environ.get("THB_API_SECRET", "YOUR_THB_API_SECRET")
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
+        # ข้อมูลบริษัท
+        company_name = request.form["company_name"]
+        company_address = request.form["company_address"]
+        company_phone = request.form["company_phone"]
 
-# -- LINE OA Configuration --
-LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "YOUR_LINE_CHANNEL_SECRET")
-LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "YOUR_LINE_CHANNEL_ACCESS_TOKEN")
+        # ข้อมูลลูกค้า
+        customer_name = request.form["customer_name"]
+        customer_address = request.form["customer_address"]
+        customer_phone = request.form["customer_phone"]
 
-# -- App Configuration --
-DEFAULT_COUNTRY_CODE = "+66"
-LOG_FILE = "sent_log.json"
+        # รายการสินค้า
+        items = request.form.getlist("item[]")
+        prices = request.form.getlist("price[]")
+        qtys = request.form.getlist("qty[]")
 
-# -- Clients Initialization --
-if LINE_SDK_AVAILABLE:
-    handler = WebhookHandler(LINE_CHANNEL_SECRET)
-    line_configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
-else:
-    handler = None
-    line_configuration = None
+        total = 0
+        for p, q in zip(prices, qtys):
+            total += float(p) * int(q)
 
-# ==============================================================================
-# Helper Functions
-# ==============================================================================
-def format_phone_number(number_str):
-    number_str = number_str.strip()
-    if number_str.startswith('0') and len(number_str) == 10:
-        return f"{DEFAULT_COUNTRY_CODE}{number_str[1:]}"
-    elif number_str.startswith('+'):
-        return number_str
-    else:
-        return number_str
-def load_sent_log():
-    try:
-        with open(LOG_FILE, 'r', encoding='utf-8') as f: return set(json.load(f))
-    except Exception: return set()
-def save_sent_log(sent_set):
-    with open(LOG_FILE, 'w', encoding='utf-8') as f: json.dump(list(sent_set), f, ensure_ascii=False, indent=2)
+        # สร้าง PDF
+        buffer = BytesIO()
+        c = canvas.Canvas(buffer, pagesize=A4)
+        width, height = A4
 
-# ==============================================================================
-# LINE OA Webhook
-# ==============================================================================
-@app.route("/webhook", methods=['POST'])
-def webhook():
-    if not LINE_SDK_AVAILABLE: abort(500)
-    signature = request.headers['X-Line-Signature']
-    body = request.get_data(as_text=True)
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-    return 'OK'
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(50, height - 50, f"ใบเสนอราคา - {datetime.date.today()}")
 
-@handler.add(MessageEvent, message=TextMessageContent)
-def handle_message(event):
-    text_input = event.message.text.strip()
-    command_parts = text_input.split(maxsplit=3)
-    reply_token = event.reply_token
-    if len(command_parts) == 4 and command_parts[0].lower() == "run":
-        target = command_parts[1]
-        sender_name = command_parts[2]
-        custom_message = command_parts[3]
-        def on_complete_callback(s, f, e=None):
-            summary_message = f"เกิดข้อผิดพลาด: {e}" if e else f"สรุปผลการส่งสำหรับ '{target}'\n(Sender: {sender_name}):\n✅ สำเร็จ: {s}\n❌ ล้มเหลว: {f}"
-            with ApiClient(line_configuration) as api_client:
-                line_bot_api = MessagingApi(api_client)
-                line_bot_api.reply_message(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=summary_message)]))
-        if target.lower().endswith(".txt"):
-            threading.Thread(target=run_sms_job_from_line, args=(target, sender_name, custom_message, on_complete_callback)).start()
-        elif target.startswith("0") and len(target) == 10 and target.isdigit():
-            threading.Thread(target=process_bulk_sms, args=([target], sender_name, custom_message, on_complete_callback)).start()
-        else:
-            reply_command_error(reply_token)
-    else:
-        reply_command_error(reply_token)
+        c.setFont("Helvetica", 12)
+        c.drawString(50, height - 80, f"บริษัท: {company_name}")
+        c.drawString(50, height - 100, f"ที่อยู่: {company_address}")
+        c.drawString(50, height - 120, f"โทร: {company_phone}")
 
-def reply_command_error(reply_token):
-    with ApiClient(line_configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)
-        reply_text = "คำสั่งไม่ถูกต้อง รูปแบบคือ:\nrun <เป้าหมาย> <SenderName> <ข้อความ>"
-        line_bot_api.reply_message(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=reply_text)]))
+        c.drawString(50, height - 160, f"ลูกค้า: {customer_name}")
+        c.drawString(50, height - 180, f"ที่อยู่: {customer_address}")
+        c.drawString(50, height - 200, f"โทร: {customer_phone}")
 
-def run_sms_job_from_line(filename, sender_name, message, callback):
-    try:
-        with open(filename, 'r', encoding='utf-8') as f:
-            phone_numbers = f.read().strip().splitlines()
-        process_bulk_sms(phone_numbers, sender_name, message, callback)
-    except FileNotFoundError:
-        callback(0, 0, error_message=f"ไม่พบไฟล์ '{filename}'")
-    except Exception as e:
-        callback(0, 0, error_message=f"เกิดข้อผิดพลาด: {e}")
+        y = height - 240
+        c.drawString(50, y, "รายการ")
+        c.drawString(250, y, "จำนวน")
+        c.drawString(350, y, "ราคา")
+        c.drawString(450, y, "รวม")
 
-# ==============================================================================
-# Core SMS Processing (ส่วนที่แก้ไขหลักตามเอกสาร API v2)
-# ==============================================================================
-def process_bulk_sms(phone_numbers, sender_name, message, callback=None):
-    """
-    ฟังก์ชันส่ง SMS ที่ยิง API v2 โดยตรงตามเอกสารล่าสุด
-    """
-    print(f"--- เริ่มงานส่ง SMS (Sender: {sender_name}) ---")
-    
-    url = "https://api-v2.thaibulksms.com/sms"
-    headers = {
-        'Content-Type': 'application/json',
-        'api_key': THB_API_KEY,
-        'api_secret': THB_API_SECRET,
-    }
+        y -= 20
+        for item, qty, price in zip(items, qtys, prices):
+            c.drawString(50, y, item)
+            c.drawString(250, y, qty)
+            c.drawString(350, y, price)
+            c.drawString(450, y, f"{float(price) * int(qty):,.2f}")
+            y -= 20
 
-    successful_sends = 0; failed_sends = 0
-    sent_log = load_sent_log(); sent_this_run = set()
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(350, y - 20, "ยอดรวม:")
+        c.drawString(450, y - 20, f"{total:,.2f} บาท")
 
-    for number in phone_numbers:
-        formatted_number_plus = format_phone_number(number)
-        number_for_thb = formatted_number_plus.replace("+", "")
-        dedup_key = f"{formatted_number_plus}|{sender_name}|{message}"
-        
-        if dedup_key in sent_log or dedup_key in sent_this_run:
-            print(f"⚠️ ข้ามการส่งซ้ำไปยัง: {number_for_thb}")
-            continue
-        try:
-            # === ส่วนที่แก้ไข Parameter ให้ตรงตามเอกสาร ===
-            payload = {
-                "msisdn": number_for_thb,
-                "message": message,
-                "sender": sender_name  # <<<<<<<<<<< แก้จาก sender_name เป็น sender
-            }
-            
-            response = requests.post(url, headers=headers, json=payload)
-            response_data = response.json()
+        c.showPage()
+        c.save()
+        buffer.seek(0)
 
-            if response.status_code == 201:
-                print(f"✅ ส่งข้อความเข้าคิวสำเร็จ: {number_for_thb}")
-                sent_log.add(dedup_key); sent_this_run.add(dedup_key)
-                successful_sends += 1
-            else:
-                error_detail = response_data.get('error', {}).get('description', 'ไม่ทราบสาเหตุ')
-                print(f"❌ ส่งข้อความล้มเหลว: {number_for_thb}, เหตุผล: {error_detail}")
-                failed_sends += 1
-        except Exception as e:
-            print(f"❌ เกิดข้อผิดพลาดร้ายแรงในการส่ง: {number_for_thb}, เหตุผล: {str(e)}")
-            failed_sends += 1
-        time.sleep(0.5)
-    
-    save_sent_log(sent_log)
-    print("--- งานส่ง SMS เสร็จสิ้น ---")
-    if callback:
-        callback(successful_sends, failed_sends)
+        return send_file(buffer, as_attachment=True, download_name="quotation.pdf", mimetype="application/pdf")
 
-# ==============================================================================
-# Other Endpoints & Main Execution
-# ==============================================================================
-@app.route("/thaibulksms-webhook", methods=['GET'])
-def thaibulksms_webhook():
-    print(f"ได้รับ Webhook จาก ThaiBulkSMS: {request.args.to_dict()}")
-    return "OK", 200
-@app.route('/api/status', methods=['GET'])
-def status():
-    uptime = datetime.now() - start_time
-    return jsonify({"สถานะ uptime": str(timedelta(seconds=int(uptime.total_seconds())))})
-@app.route('/', methods=['GET'])
-def main():
-    return jsonify({"สถานะบริการ": "ออนไลน์", "ประเภทบริการ": "เกตเวย์สำหรับส่ง SMS (ThaiBulkSMS v2)"})
-if __name__ == '__main__':
-    if not LINE_SDK_AVAILABLE:
-        print("!!! ข้อผิดพลาดร้ายแรง: ยังไม่ได้ติดตั้งไลบรารีที่จำเป็น !!!")
-        print("กรุณารันคำสั่ง: pip install line-bot-sdk requests Flask gunicorn")
-        sys.exit(1)
-        
-    print("--- เริ่มต้นการทำงานในโหมดเซิร์ฟเวอร์ ---")
-    print("รอรับคำสั่งจาก LINE... กด CTRL+C เพื่อหยุดการทำงาน")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    return render_template("form.html")
+
+if __name__ == "__main__":
+    app.run(debug=True)
